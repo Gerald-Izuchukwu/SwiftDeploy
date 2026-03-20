@@ -1,0 +1,44 @@
+services:
+  {{ services.node.name }}:
+    image: {{ services.node.image }}
+    container_name: {{ services.node.container_name }}
+    restart: {{ defaults.restart_policy }}
+    ports:
+    - {{ services.node.port_on_host }}:{{ services.node.port_on_container }}
+    networks:
+    - {{ network.name }} 
+    environment:
+    - MODE={{ services.node.MODE }}
+    - PORT={{ services.node.PORT }}
+    - VERSION={{ services.node.VERSION }}
+
+  {{ services.python.name }}:
+    image: {{ services.python.image }}
+    container_name: {{ services.python.container_name }}
+    restart: {{ defaults.restart_policy }}
+    ports:
+    - {{ services.python.port_on_host }}:{{ services.python.port_on_container }}
+    networks:
+    - {{ network.name }} 
+    environment:
+    - MODE={{ services.python.MODE }}
+    - PORT={{ services.python.PORT }}
+    - VERSION={{ services.python.VERSION }}
+
+  nginx: 
+    image: {{ nginx.image }}
+    container_name: {{ nginx.container_name }}
+    restart: {{ defaults.restart_policy }}
+    ports: 
+    - {{ nginx.port_on_host }}:{{ nginx.port_on_container }}
+    networks:
+    - {{ network.name }}
+    depends_on:
+    - {{ services.node.name}}
+    - {{ services.python.name}}
+    volumes:
+    - {{ nginx.volumes }}
+
+networks:
+  {{ network.name }}:
+    driver: {{ network.driver_type }}

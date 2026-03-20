@@ -1,0 +1,17 @@
+server{
+  listen {{ nginx.port_on_container }};
+
+  location / {
+    proxy_pass http://{{ services.node.container_name }}:{{ services.node.port_on_container }}/;
+  }
+  
+  location /healthz {
+    proxy_pass http://{{ services.node.container_name }}:{{ services.node.port_on_container }}/healthz;
+  }
+
+  location /chaos {
+    proxy_pass http://{{ services.node.container_name }}:{{ services.node.port_on_container }}/chaos;
+  }
+
+
+}

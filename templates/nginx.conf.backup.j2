@@ -1,0 +1,15 @@
+server{
+  listen {{ nginx.port_on_container }};
+
+  location / {
+    proxy_pass http://{{ services.python.container_name }}:{{ services.python.container_port }};
+  }
+
+  location /healthz {
+    proxy_pass http://{{ services.python.container_name }}:{{ services.python.container_port }}/healthz;
+  }
+
+  location /chaos {
+    proxy_pass http://{{ services.python.container_name }}:{{ services.python.container_port }}/chaos;
+  }
+}
