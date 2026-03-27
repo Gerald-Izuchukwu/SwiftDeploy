@@ -1,17 +1,35 @@
-server{
-  listen {{ nginx.port_on_container }};
+worker_processes {{ nginx.worker_processes }};
 
-  location / {
-    proxy_pass http://{{ services.node.container_name }}:{{ services.node.port_on_container }}/;
+events { worker_connections 1024; }
+
+
+
+http {
+  log_format custom  '$time_iso8601 | $status | ${request_time}s | $upstream_addr | $request';
+  access_log {{ nginx.log_path }}/access.log custom;  
+
+  server{
+    listen {{ nginx.port_on_container }};
+
+    proxy_read_timeout {{ nginx.proxy_timeout }};
+    proxy_connect_timeout {{ nginx.proxy_timeout }};
+
+    add_header X-Deployed-By swiftdeploy;
+    proxy_pass_header X-mode;
+
+    resolver 127.0.0.11 valid=10s;
+    set $upstream http://{{ services.node.name }}:{{ services.node.port_on_host }};
+
+
+    error_page 502 503 504 /gateway_error.json;
+    location = /gateway_error.json {
+            internal;
+            default_type application/json;
+            return 502 '{"error":"gateway_error","code":502,"service":"{{ services.node.name }}","contact":"ops@swiftdeploy.io"}';
+    }
+
+    location / {
+        proxy_pass $upstream;
+    }
   }
-  
-  location /healthz {
-    proxy_pass http://{{ services.node.container_name }}:{{ services.node.port_on_container }}/healthz;
-  }
-
-  location /chaos {
-    proxy_pass http://{{ services.node.container_name }}:{{ services.node.port_on_container }}/chaos;
-  }
-
-
 }

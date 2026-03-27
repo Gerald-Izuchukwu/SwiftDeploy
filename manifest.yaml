@@ -28,7 +28,10 @@ nginx:
   port_on_host: 8080
   port_on_container: 8080
   network_name: swiftdeploy-net
-  volumes: ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+  volumes: ./nginx.conf:/etc/nginx/nginx.conf:ro
+  log_path: /var/log/swiftdeploy
+  proxy_timeout: 5s
+  worker_processes: auto
 
 network:
   name: swiftdeploy-net
@@ -36,3 +39,8 @@ network:
 
 defaults:
   restart_policy: unless-stopped
+
+metrics:
+  enabled: true
+  scrape_interval: 20
+  retention: 50

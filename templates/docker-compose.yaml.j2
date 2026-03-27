@@ -38,7 +38,11 @@ services:
     - {{ services.python.name}}
     volumes:
     - {{ nginx.volumes }}
+    - logs:{{ nginx.log_path }}
 
 networks:
   {{ network.name }}:
     driver: {{ network.driver_type }}
+
+volumes:
+  logs:

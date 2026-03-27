@@ -11,10 +11,11 @@
   "license": "ISC",
   "description": "",
   "devDependencies": {
-    "express": "^5.2.1",
     "nodemon": "^3.1.14"
   },
   "dependencies": {
-    "dotenv": "^17.3.1"
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "prom-client": "^15.1.3"
   }
 }

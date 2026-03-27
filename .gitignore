@@ -1,2 +1,5 @@
 .env
 hi.py
+index.js
+node_modules/
+venv/

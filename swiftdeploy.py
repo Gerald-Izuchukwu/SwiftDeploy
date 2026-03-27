@@ -1,8 +1,10 @@
-import sys, os, subprocess, time, json, socket, yaml, ruamel.yaml
+import sys, os, subprocess, time, json, socket, yaml, ruamel.yaml, urllib.request
 from jinja2 import Environment, FileSystemLoader
-
+from datetime import datetime, UTC
 
 MANIFEST= "manifest.yaml"
+METRICS_LOG = ".metrics_history.jsonl"
+
 
 #1 load the manifest file
 def load_manifest():
@@ -63,7 +65,6 @@ def swiftdeploy_validate():
 
     # fourth check: if image is valid
     image = manifest.get("services", {}).get("node", {}).get("image", "")
-    print(image)
     r = subprocess.run(["docker", "pull", image], capture_output=True)
     result = subprocess.run(["docker", "image", "inspect", image], capture_output=True)
     if result.returncode != 0:
@@ -89,8 +90,7 @@ def swiftdeploy_validate():
     else:
         print(f"✓ Docker compose is installed")
 
-
-# swiftdeploy deploy
+#5 swiftdeploy deploy
 def swiftdeploy_deploy():
     # call init function
     swiftdeploy_init()
@@ -108,7 +108,6 @@ def swiftdeploy_deploy():
     deadline = time.time() + 60
     while time.time() < deadline:
         try:
-            import urllib.request
             urllib.request.urlopen(f"http://localhost:{port}/healthz", timeout=3)
             print("✓ Stack is healthy")
             return
@@ -116,6 +115,42 @@ def swiftdeploy_deploy():
             time.sleep(3)
     print("✗ Health check timed out after 60s"); sys.exit(1)
 
+#6 swiftdeploy status
+def swiftdeploy_status():
+    manifest = load_manifest()
+    port = manifest["nginx"]["port_on_host"]
+    interval = manifest["metrics"]["scrape_interval"]
+    retention = manifest["metrics"]["retention"]
+    prev_count = None
+    prev_time = None
+    while True:
+        os.system("clear")
+        try:
+            raw = urllib.request.urlopen(f"http://localhost:{port}/metrics", timeout=5).read().decode()
+            snapshot = parse_metrics(raw)
+            snapshot["timestamp"] = datetime.now(UTC).isoformat()
+            # Append to history
+            with open(METRICS_LOG, "a") as f:
+                f.write(json.dumps(snapshot) + "\n")
+            #Trim history
+            trim_history(retention)
+            #compute rate
+
+            rate, prev_count, prev_time = compute_rate(snapshot["total_requests"], prev_count, prev_time)
+            uptime_str = format_uptime(snapshot.get('uptime', 0))
+            print(f"┌──────────────────── SwiftDeploy Status ────────────────────┐")
+            print(f"│ Service : {manifest['services']['name']} ({snapshot.get('mode','?')})  Uptime: {uptime_str} |")
+            print(f"│ Requests: {snapshot.get('total_requests',0)} total  Rate: {rate:.1f} req/s |")
+            print(f"│ Errors  : {snapshot.get('error_rate',0):.1f}%  Latency avg: {snapshot.get('avg_latency',0)*1000:.0f}ms  p99: {snapshot.get('p99',0)*1000:.0f}ms |")
+            print(f"│ Chaos   : {snapshot.get('chaos','none')}  Nginx: ✓ |")
+            print(f"└────────────────────────────────────────────────────────────┘")
+            print(f"\nRefreshing every {interval}s — Ctrl+C to exit")
+        except KeyboardInterrupt:
+            print("\nExiting Status View")
+            break
+        except Exception as e:
+            print(f"Error Scraping metrics {e}")
+        time.sleep(interval)
 
 # swiftdeploy promote mode
 def swiftdeploy_promote(target):
@@ -132,17 +167,16 @@ def swiftdeploy_promote(target):
 
     #restart on the service container(Nodejs container)
     service = manifest["services"]["node"]["name"]
-    subprocess.run(["docker", "compose", "restart", service])
+    subprocess.run(["docker", "compose", "up", "-d", "--force-recreate", "--no-deps", service], check=True)
 
     # confirm switching
     time.sleep(3)
-    import urllib.request
     port = manifest["nginx"]["port_on_host"]
     response = urllib.request.urlopen(f"http://localhost:{port}/healthz", timeout=5).read()
     print(f"Mode switched to {target}. /healthz: {response.decode()}")
 
 # tear down/bring down everything
-def teardown(clean=False):
+def swiftdeploy_teardown(clean=False):
     subprocess.run(["docker", "compose", "down"], capture_output=True)
     if clean == True:
         for f in ["nginx.conf", "docker-compose.yaml"]:
@@ -151,11 +185,101 @@ def teardown(clean=False):
         print("Generated Files removed")
 
 
+def parse_metrics(text):
+    result = {
+        "total_requests": 0,
+        "error_rate": 0,
+        "mode": "stable",
+        "chaos": "none",
+        "uptime": 0,
+        "avg_latency": 0,
+        "p99": 0
+    }
+    total = 0
+    errprs = 0
+    duration_sum = 0
+    duration_count = 0
+    buckets = {}
+        
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        if line.startswith("http_requests_total{"):
+            parts = line.split(" ")
+            count = float(parts[-1])
+            total += count 
+            if "status_code=5":
+                errors += count
+        elif line.startswith("http_request_duration_seconds_bucket{"):
+            le = line.split('le="')[1].split('"')[0]
+            val = float(line.split()[-1])
+            buckets[le] = val
+        elif line.startswith("http_request_duration_seconds_count"):
+            duration_count = float(line.split()[-1])
+        elif line.startswith("app_uptime_seconds"):
+            result["uptime"] = float(line.split()[-1])
+        elif line.startswith("app_mode"):
+            result["mode"] = "canary" if float(line.split()[-1]) == 1 else "stable"
+        elif line.startswith("chaos_active"):
+            v = float(line.split()[-1])
+            result["chaos"] = {0:"none", 1:"slow", 2:"error"}.get(int(v),"none")
+            result["total_requests"] = int(total)
+    result["error_rate"] = (errors/total*100) if total > 0 else 0
+    result["avg_latency"] = (duration_sum/duration_count) if duration_count > 0 else 0
+    # p99 from buckets
+    if buckets and duration_count > 0:
+        target = 0.99 * duration_count
+        sorted_buckets = sorted([(float(k) if k != "+Inf" else float("inf"), v) for k,v in buckets.items()])
+        for le, count in sorted_buckets:
+            if count >= target:
+                result["p99"] = le if le != float("inf") else 5.0
+                break
+    return result
+
+def trim_history(retention):
+    if not os.path.exists(METRICS_LOG): return
+    with open(METRICS_LOG) as f:
+        lines = f.readlines()
+    if len(lines) > retention:
+        with open(METRICS_LOG, "w") as f:
+            f.writelines(lines[-retention:])
+
+def compute_rate(val, prev_count, prev_time):
+    rate = 0
+    if prev_count is not None and prev_time is not None:
+        elapsed = time.time() - prev_time
+        rate = (val - prev_count)/ elapsed if elapsed > 0 else 0
+    prev_count = val
+    prev_time = time.time()
+    return rate, prev_count, prev_time
+
+def format_uptime(seconds):
+    hour = int(seconds // 3600)
+    minute = int((seconds % 3600) // 60)
+    second = int(seconds % 60) 
+    return f"{hour}h {minute}m {second}s"
 
 
+if __name__ == "__main__":
+    args = sys.argv[1: ]
+    if not args:
+        print("Usage: swiftdeploy <command> [options]"); sys.exit(1)
+    cmd = args[0]
+    if cmd == "init": 
+        swiftdeploy_init()
+    elif cmd == "validate": 
+        swiftdeploy_validate()
+    elif cmd == "deploy": 
+        swiftdeploy_deploy()
+    elif cmd == "status": 
+        swiftdeploy_status()
+    elif cmd == "promote":
+        if len(args) < 2: print("Usage: swiftdeploy promote canary|stable"); sys.exit(1)
+        swiftdeploy_promote(args[1])
+    # elif cmd == "audit": 
+    #     swiftdeploy_audit()
+    elif cmd == "teardown":
+        swiftdeploy_teardown("--clean" in args)
+    else:
+        print(f"Unknown command: {cmd}"); sys.exit(1)
 
-swiftdeploy_init()
-swiftdeploy_validate()
-swiftdeploy_deploy()
-swiftdeploy_promote('canary')
-teardown(clean=True)
