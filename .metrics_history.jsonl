@@ -1,0 +1,1 @@
+{"total_requests": 740, "error_rate": 100.0, "mode": "canary", "chaos": "none", "uptime": 7436.607, "avg_latency": 0.0, "p99": 0.01, "timestamp": "2026-03-27T14:57:48.051838+00:00"}
